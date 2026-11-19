@@ -237,10 +237,13 @@ func openOne(path string, opt OpenOptions, dbg func(string, ...any)) (*Device, e
 	}, nil
 }
 
-// TuneISDBT は指定した UHF 物理チャンネルに選局し、最大 2.5 秒ロックを待つ。
+// TuneISDBT は地デジ側を起こしてから指定した UHF 物理チャンネルに選局し、最大 2.5 秒ロックを待つ。
 func (d *Device) TuneISDBT(ch int, stopCh <-chan struct{}) (bool, error) {
 	hz, err := sonylj.UHFChannelHz(ch)
 	if err != nil {
+		return false, err
+	}
+	if err := sonylj.WakeISDBT(d.Client, true, false); err != nil {
 		return false, err
 	}
 	if err := sonylj.TuneISDBT(d.Client, hz); err != nil {
