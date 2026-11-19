@@ -192,9 +192,6 @@ func openOne(path string, opt OpenOptions, dbg func(string, ...any)) (*Device, e
 		st, _ := c.GetCardStatus()
 		dbg("B-CAS card status = %d", st)
 	} else {
-		if !opt.NoAuth {
-			c.InitInternalBCAS()
-		}
 		st, _ := c.GetCardStatus()
 		dbg("warm reopen: skip GPIO/Init (B-CAS status=%d)", st)
 	}
