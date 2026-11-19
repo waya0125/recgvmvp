@@ -1,10 +1,10 @@
 # recgvmvp
 
-I-O DATA **GV-MVP/VZ**（`04bb:052b`、地上デジタル・BS・110度CS USB チューナー）を Linux 単体で操作し、MPEG-2 TS を出力する純 Go 製コマンドです（cgo・libusb 不要、Linux `usbfs` 直叩き）。
+I-O DATA **GV-MVP/VZ**（`04bb:052b`、地上デジタル・BS・110度CS）および **GV-MVP/HZ**（`04bb:0522`、地上デジタル専用）を Linux 単体で操作し、MPEG-2 TS を出力する純 Go 製コマンドです（cgo・libusb 不要、Linux `usbfs` 直叩き）。
 
 * 本体スロットに挿入した B-CAS カードでハードウェア復号された TS が出力されます（外部カードリーダー・`b25` デコーダ不要）。
 * IVDRM セッション制御・TS 復号手順は nuIlpointer 氏の [BonDriver_GVMVPVZ_T](https://github.com/nuIlpointer/BonDriver_GVMVPVZ)（MIT）および Linux 移植版を参考にしています。
-* デバイスの技術仕様・特性の詳細は [docs/GV-MVP-VZ.md](./docs/GV-MVP-VZ.md) を参照してください。
+* デバイスの技術仕様・特性の詳細は [docs/GV-MVP-VZ.md](./docs/GV-MVP-VZ.md) および [docs/GV-MVP-HZ.md](./docs/GV-MVP-HZ.md) を参照してください。
 
 ## ビルドとインストール
 
@@ -25,13 +25,16 @@ sudo udevadm control --reload-rules
 
 ## ファームウェア
 
-電源投入直後（コールド状態、`bcdDevice != 0x0100`）の機器を使う場合は、純正ドライバ等から `NXP7164F_052B04BB.bin` を取り出して次のいずれかに配置してください（上から順に探索します）。すでにウォーム状態（`bcdDevice == 0x0100`）の場合は不要です。
+電源投入直後（コールド状態 / DFU 状態）の機器を使う場合は、純正ドライバ等から対応ファームウェアを取り出して次のいずれかに配置してください（上から順に探索します）。すでにウォーム状態の場合は不要です。
+
+* GV-MVP/VZ（`04bb:052b`）: `NXP7164F_052B04BB.bin`
+* GV-MVP/HZ（`04bb:0522`）: `NXP7164F_052204BB.bin`
 
 1. `--firmware` / `--fw` で指定したパス
-2. 環境変数 `GVMVPVZ_FW_PATH`
+2. 環境変数 `GVMVP_FW_PATH` / `GVMVPVZ_FW_PATH` / `GVMVPHZ_FW_PATH`
 3. `recgvmvp` 実行ファイルと同じディレクトリ
-4. `/usr/local/share/gvmvpvz/NXP7164F_052B04BB.bin`
-5. `/lib/firmware/NXP7164F_052B04BB.bin`
+4. `/usr/local/share/gvmvpvz/<ファイル名>`
+5. `/lib/firmware/<ファイル名>`
 
 付属の `gvmvp-firmware` コマンドでドライバフォルダからの探索・SHA-256 照合・配置ができます：
 
@@ -49,10 +52,11 @@ recgvmvp [オプション] チャンネル 秒 出力先
   出力先      出力ファイルパス。'-' を指定すると標準出力
 
 オプション:
-  --device PATH     使う GV-MVP/VZ の機器ファイル（/dev/bus/usb/BBB/DDD）
-  --firmware PATH   ファームウェア（NXP7164F_052B04BB.bin）のパス（--fw も可）
+  --device PATH     使う機器ファイル（/dev/bus/usb/BBB/DDD）。空なら自動選択
+  --model MODEL     使う機種（auto, vz, hz。既定: auto）
+  --firmware PATH   ファームウェア（.bin）のパス（--fw も可）
   --tsid HEX        BS/CS の TSID を 16 進で明示指定（例: 0x40f1）
-  --check           選局してロック状態と C/N 目安を表示するだけ
+  --check           選局してロック状態と受信目安を表示するだけ
   --reset           開く前に USB ポートリセットを発行する
   --debug           詳細ログを stderr に出力（GVMVPVZ_DEBUG=1 でも可）
   --b25 / --strip / --sid   recpt1 互換用オプション（受け付けるが無視）

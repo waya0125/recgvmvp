@@ -1,2 +1,4 @@
 # I-O DATA GV-MVP/VZ (04bb:052b)
 SUBSYSTEM=="usb", ATTR{idVendor}=="04bb", ATTR{idProduct}=="052b", MODE="0660", GROUP="video"
+# I-O DATA GV-MVP/HZ (04bb:0522)
+SUBSYSTEM=="usb", ATTR{idVendor}=="04bb", ATTR{idProduct}=="0522", MODE="0660", GROUP="video"

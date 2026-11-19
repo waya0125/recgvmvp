@@ -22,6 +22,8 @@ import (
 )
 
 func main() {
+	pid := flag.Uint("pid", 0x052b, "USB Product ID (例: VZ=0x052b, HZ=0x0522)")
+	boot := flag.String("boot", "", "指定したファームウェア (.bin) で DFU ブートを実行してから確認する")
 	iface := flag.Uint("if", 0, "取るインターフェース")
 	out := flag.Uint("out", 0x01, "命令を送るエンドポイント（bulk OUT）")
 	in := flag.Uint("in", 0x81, "返事を受けるエンドポイント（interrupt IN）")
@@ -32,21 +34,30 @@ func main() {
 	reads := flag.Int("reads", 3, "返事を待つ回数")
 	timeout := flag.Uint("timeout", 1000, "1 回の待ち時間（ミリ秒）")
 	bcas := flag.Bool("bcas", false, "unit 9 の GetCardStatus（sel 0x1f）で本体 B-CAS カードの挿入状態を調べる")
+	i2c := flag.Bool("i2c", false, "unit に対して I2CRead(reg=sel, len=size) を実行する")
 	flag.Parse()
 
-	if err := run(uint32(*iface), uint8(*out), uint8(*in), uint8(*unit), uint16(*sel), uint16(*size), uint8(*seq), *reads, uint32(*timeout), *bcas); err != nil {
+	if err := run(uint16(*pid), *boot, uint32(*iface), uint8(*out), uint8(*in), uint8(*unit), uint16(*sel), uint16(*size), uint8(*seq), *reads, uint32(*timeout), *bcas, *i2c); err != nil {
 		fmt.Fprintln(os.Stderr, "gvmvp-probe:", err)
 		os.Exit(1)
 	}
 }
 
-func run(iface uint32, out, in, unit uint8, sel, size uint16, seq uint8, reads int, timeout uint32, bcas bool) error {
-	paths, err := usbfs.Find(usbfs.ID{Vendor: 0x04bb, Product: 0x052b})
+func run(pid uint16, boot string, iface uint32, out, in, unit uint8, sel, size uint16, seq uint8, reads int, timeout uint32, bcas, i2c bool) error {
+	id := usbfs.ID{Vendor: 0x04bb, Product: pid}
+	if boot != "" {
+		if err := saa7164usb.BootFirmware(id, boot, func(f string, a ...any) {
+			fmt.Printf(f+"\n", a...)
+		}); err != nil {
+			return fmt.Errorf("BootFirmware: %w", err)
+		}
+	}
+	paths, err := usbfs.Find(id)
 	if err != nil {
 		return err
 	}
 	if len(paths) == 0 {
-		return errors.New("GV-MVP/VZ（04bb:052b）が見つからない")
+		return fmt.Errorf("機器（%s）が見つからない", id)
 	}
 	dev, err := usbfs.Open(paths[0])
 	if err != nil {
@@ -75,6 +86,15 @@ func run(iface uint32, out, in, unit uint8, sel, size uint16, seq uint8, reads i
 			return fmt.Errorf("GetCardStatus: %w", err)
 		}
 		fmt.Printf("B-CAS カード状態（unit 9 sel 0x1f）: %d（1=挿入あり, 0=未挿入）\n", st)
+		return nil
+	}
+	if i2c {
+		c := &saa7164usb.Client{Dev: dev, Out: out, In: in, TimeoutMS: timeout}
+		v, err := c.I2CRead(unit, byte(sel), int(size))
+		if err != nil {
+			return fmt.Errorf("I2CRead(unit=%d reg=0x%02x len=%d): %w", unit, byte(sel), size, err)
+		}
+		fmt.Printf("I2CRead(unit=%d reg=0x%02x len=%d): %s\n", unit, byte(sel), size, hex.EncodeToString(v))
 		return nil
 	}
 

@@ -23,9 +23,12 @@ import (
 	"time"
 
 	"github.com/waya0125/recgvmvp/internal/channel"
+	"github.com/waya0125/recgvmvp/internal/gvmvphz"
 	"github.com/waya0125/recgvmvp/internal/gvmvpvz"
 	"github.com/waya0125/recgvmvp/internal/ivdrm"
+	"github.com/waya0125/recgvmvp/internal/saigawa"
 	"github.com/waya0125/recgvmvp/internal/sonylj"
+	"github.com/waya0125/recgvmvp/internal/usbfs"
 )
 
 const usage = `使い方: recgvmvp [オプション] チャンネル 秒 出力先
@@ -41,6 +44,7 @@ type options struct {
 	strip    bool
 	sid      string
 	device   string
+	model    string
 	firmware string
 	tsid     uint16
 	check    bool
@@ -64,8 +68,9 @@ func parseArgs(args []string, stderr io.Writer) (*options, error) {
 	fs.BoolVar(&o.b25, "b25", false, "recpt1 互換（本体内蔵 B-CAS で復号されるため何もしない）")
 	fs.BoolVar(&o.strip, "strip", false, "recpt1 互換（無視）")
 	fs.StringVar(&o.sid, "sid", "", "recpt1 互換（無視）")
-	fs.StringVar(&o.device, "device", "", "使う GV-MVP/VZ の機器ファイル（/dev/bus/usb/BBB/DDD）。空なら空いているもの")
-	fs.StringVar(&o.firmware, "firmware", "", "コールド状態の機器に送るファームウェア（NXP7164F_052B04BB.bin）")
+	fs.StringVar(&o.device, "device", "", "使う機器ファイル（/dev/bus/usb/BBB/DDD）。空なら空いているもの")
+	fs.StringVar(&o.model, "model", "auto", "使う機種（auto, vz, hz）")
+	fs.StringVar(&o.firmware, "firmware", "", "コールド状態の機器に送るファームウェア（.bin）")
 	fs.StringVar(&fwAlias, "fw", "", "--firmware の短縮形（環境変数 GVMVPVZ_FW_PATH も可）")
 	fs.StringVar(&tsidStr, "tsid", "", "BS/CS の TSID を 16 進で明示指定（例: 0x40f1）")
 	fs.BoolVar(&o.check, "check", false, "選局してロック状態と C/N（目安）を表示するだけ")
@@ -133,6 +138,120 @@ func main() {
 	}
 }
 
+type tunerDevice interface {
+	TuneISDBT(ch int, stopCh <-chan struct{}) (bool, error)
+	TuneISDBS(freqKHz uint32, tsid uint16, stopCh <-chan struct{}) (bool, error)
+	StartStream(onChunk func([]byte)) error
+	StopStream()
+	Close()
+	SessionKeyBytes() [16]byte
+	BulkStream() *usbfs.BulkStream
+	CheckStatus(ch channel.Channel) string
+}
+
+type vzAdapter struct{ *gvmvpvz.Device }
+
+func (a vzAdapter) SessionKeyBytes() [16]byte    { return a.SessionKey }
+func (a vzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
+func (a vzAdapter) CheckStatus(ch channel.Channel) string {
+	if ch.System == channel.ISDBT {
+		lk, _, _, _ := sonylj.LockISDBT(a.Client)
+		cn, _ := sonylj.CNApproxDB(a.Client)
+		lkStr := "no"
+		if lk {
+			lkStr = "yes"
+		}
+		return fmt.Sprintf("UHF %dch  lock=%s  C/N(approx)=%.1f dB", ch.UHF, lkStr, cn)
+	}
+	lk, rc3, _ := sonylj.LockISDBS(a.Client)
+	raw, _ := sonylj.CNRawISDBS(a.Client)
+	lkStr := "no"
+	if lk {
+		lkStr = "yes"
+	}
+	return fmt.Sprintf("%s  lock=%s  regC3=0x%02X  cn_raw=%d", ch.Name, lkStr, rc3, raw)
+}
+
+type hzAdapter struct{ *gvmvphz.Device }
+
+func (a hzAdapter) SessionKeyBytes() [16]byte    { return a.SessionKey }
+func (a hzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
+func (a hzAdapter) CheckStatus(ch channel.Channel) string {
+	_, _, lk, _ := saigawa.ReadLock(a.Client)
+	str, _ := saigawa.ReadSignalStrength(a.Client)
+	lkStr := "no"
+	if lk {
+		lkStr = "yes"
+	}
+	return fmt.Sprintf("UHF %dch  lock=%s  strength=%d", ch.UHF, lkStr, str)
+}
+
+func openTunerDevice(o *options, dbg func(string, ...any)) (tunerDevice, error) {
+	openVZ := func() (tunerDevice, error) {
+		d, err := gvmvpvz.OpenDevice(gvmvpvz.OpenOptions{
+			DevicePath: o.device,
+			Firmware:   o.firmware,
+			Reset:      o.reset,
+			NoAuth:     o.check,
+			Debugf:     dbg,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return vzAdapter{d}, nil
+	}
+	openHZ := func() (tunerDevice, error) {
+		d, err := gvmvphz.OpenDevice(gvmvphz.OpenOptions{
+			DevicePath: o.device,
+			Firmware:   o.firmware,
+			Reset:      o.reset,
+			NoAuth:     o.check,
+			Debugf:     dbg,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return hzAdapter{d}, nil
+	}
+
+	if o.device != "" {
+		id, _, err := usbfs.ReadDeviceInfo(o.device)
+		if err != nil {
+			return nil, err
+		}
+		switch id {
+		case gvmvpvz.USBID:
+			return openVZ()
+		case gvmvphz.USBID:
+			return openHZ()
+		default:
+			return nil, fmt.Errorf("%s は非対応デバイス (%s)", o.device, id)
+		}
+	}
+
+	switch o.model {
+	case "vz":
+		return openVZ()
+	case "hz":
+		if o.ch.System != channel.ISDBT {
+			return nil, errors.New("GV-MVP/HZ は BS/110度CS（ISDB-S）非対応")
+		}
+		return openHZ()
+	case "auto", "":
+		if o.ch.System == channel.ISDBS {
+			return openVZ()
+		}
+		if d, err := openVZ(); err == nil {
+			return d, nil
+		} else if !errors.Is(err, gvmvpvz.ErrNoDevice) && !errors.Is(err, syscall.EBUSY) {
+			return nil, err
+		}
+		return openHZ()
+	default:
+		return nil, fmt.Errorf("未対応の --model %q（auto, vz, hz）", o.model)
+	}
+}
+
 func run(o *options, stderr io.Writer) error {
 	dbg := func(format string, a ...any) {
 		if o.debug {
@@ -140,13 +259,7 @@ func run(o *options, stderr io.Writer) error {
 		}
 	}
 
-	dev, err := gvmvpvz.OpenDevice(gvmvpvz.OpenOptions{
-		DevicePath: o.device,
-		Firmware:   o.firmware,
-		Reset:      o.reset,
-		NoAuth:     o.check, // --check は選局とロックを見るだけなので、IVDRM の認証をしない
-		Debugf:     dbg,
-	})
+	dev, err := openTunerDevice(o, dbg)
 	if err != nil {
 		return err
 	}
@@ -175,23 +288,7 @@ func run(o *options, stderr io.Writer) error {
 	if o.check {
 		ticks := o.seconds * 2
 		for i := 0; i < ticks; i++ {
-			if o.ch.System == channel.ISDBT {
-				lk, _, _, _ := sonylj.LockISDBT(dev.Client)
-				cn, _ := sonylj.CNApproxDB(dev.Client)
-				lkStr := "no"
-				if lk {
-					lkStr = "yes"
-				}
-				fmt.Printf("UHF %dch  lock=%s  C/N(approx)=%.1f dB\n", o.ch.UHF, lkStr, cn)
-			} else {
-				lk, rc3, _ := sonylj.LockISDBS(dev.Client)
-				raw, _ := sonylj.CNRawISDBS(dev.Client)
-				lkStr := "no"
-				if lk {
-					lkStr = "yes"
-				}
-				fmt.Printf("%s  lock=%s  regC3=0x%02X  cn_raw=%d\n", o.ch.Name, lkStr, rc3, raw)
-			}
+			fmt.Println(dev.CheckStatus(o.ch))
 			select {
 			case <-stopCh:
 				return nil
@@ -216,7 +313,7 @@ func run(o *options, stderr io.Writer) error {
 	var firstRead atomic.Bool
 	var dropped atomic.Uint64
 	tsCh := make(chan []byte, 512)
-	dec, err := ivdrm.NewTSDecryptor(dev.SessionKey, func(tsc uint8) {
+	dec, err := ivdrm.NewTSDecryptor(dev.SessionKeyBytes(), func(tsc uint8) {
 		dbg("TS key received (tsc=%d)", tsc)
 	})
 	if err != nil {
@@ -269,7 +366,7 @@ loop:
 			}
 			totalBytes += uint64(len(pkt))
 		case <-time.After(200 * time.Millisecond):
-			if dev.Stream != nil && dev.Stream.DeviceGone() {
+			if st := dev.BulkStream(); st != nil && st.DeviceGone() {
 				return errors.New("USB デバイスが切断された")
 			}
 		}

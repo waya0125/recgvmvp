@@ -18,7 +18,10 @@ import (
 	"github.com/waya0125/recgvmvp/internal/usbfs"
 )
 
-var vzID = usbfs.ID{Vendor: 0x04bb, Product: 0x052b}
+var (
+	vzID = usbfs.ID{Vendor: 0x04bb, Product: 0x052b}
+	hzID = usbfs.ID{Vendor: 0x04bb, Product: 0x0522}
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -66,7 +69,7 @@ func cmdVerify(args []string) error {
 
 func cmdInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
-	out := fs.String("o", filepath.Join("/usr/local/share/gvmvpvz", saa7164usb.FirmwareName), "配置先のパス")
+	out := fs.String("o", "", "配置先のパス（既定: /usr/local/share/gvmvpvz/<ファイル名>）")
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		usage()
@@ -75,18 +78,22 @@ func cmdInstall(args []string) error {
 	if err != nil {
 		return err
 	}
+	dst := *out
+	if dst == "" {
+		dst = filepath.Join("/usr/local/share/gvmvpvz", filepath.Base(info.Path))
+	}
 	data, err := os.ReadFile(info.Path)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(*out, data, 0o644); err != nil {
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
 		return err
 	}
 	printInfo(info)
-	fmt.Printf("  → %s へ配置しました\n", *out)
+	fmt.Printf("  → %s へ配置しました\n", dst)
 	return nil
 }
 
@@ -95,33 +102,59 @@ func cmdLoad(args []string) error {
 	if len(args) > 0 {
 		fwArg = args[0]
 	}
-	fwPath, err := saa7164usb.ResolveFirmware(fwArg)
-	if err != nil {
-		return err
+	type target struct {
+		name   string
+		id     usbfs.ID
+		fwName string
 	}
-	info, err := saa7164usb.InspectFirmware(fwPath)
-	if err != nil {
-		return err
+	targets := []target{
+		{"GV-MVP/VZ", vzID, saa7164usb.FirmwareName},
+		{"GV-MVP/HZ", hzID, saa7164usb.FirmwareNameHZ},
 	}
-	paths, err := usbfs.Find(vzID)
-	if err != nil {
-		return err
+	foundAny := false
+	for _, t := range targets {
+		paths, err := usbfs.Find(t.id)
+		if err != nil {
+			return err
+		}
+		if len(paths) == 0 {
+			continue
+		}
+		foundAny = true
+		_, bcd, err := usbfs.ReadDeviceInfo(paths[0])
+		if err != nil {
+			return err
+		}
+		isWarm := false
+		if bcd == 0x0100 {
+			if dev, oerr := usbfs.Open(paths[0]); oerr == nil {
+				isWarm = !saa7164usb.IsDFUDevice(dev)
+				_ = dev.Close()
+			}
+		}
+		if isWarm {
+			fmt.Printf("%s (%s) はすでにウォーム状態 (bcdDevice=0x%04X) のため転送不要です\n", t.name, paths[0], bcd)
+			continue
+		}
+		fwPath, err := saa7164usb.ResolveFirmwareFor(fwArg, t.fwName)
+		if err != nil {
+			return err
+		}
+		info, err := saa7164usb.InspectFirmware(fwPath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s 転送開始: %s (ver=0x%08x, SHA-256=%s)\n", t.name, info.Path, info.Version, info.SHA256)
+		if err := saa7164usb.BootFirmware(t.id, info.Path, func(f string, a ...any) {
+			fmt.Printf("  "+f+"\n", a...)
+		}); err != nil {
+			return err
+		}
 	}
-	if len(paths) == 0 {
-		return fmt.Errorf("GV-MVP/VZ (%s) が見つからない", vzID)
+	if !foundAny {
+		return fmt.Errorf("GV-MVP/VZ (%s) も GV-MVP/HZ (%s) も見つからない", vzID, hzID)
 	}
-	_, bcd, err := usbfs.ReadDeviceInfo(paths[0])
-	if err != nil {
-		return err
-	}
-	if bcd == 0x0100 {
-		fmt.Printf("%s はすでにウォーム状態 (bcdDevice=0x%04X) のため転送不要です\n", paths[0], bcd)
-		return nil
-	}
-	fmt.Printf("転送開始: %s (ver=0x%08x, SHA-256=%s)\n", info.Path, info.Version, info.SHA256)
-	return saa7164usb.BootFirmware(vzID, info.Path, func(f string, a ...any) {
-		fmt.Printf("  "+f+"\n", a...)
-	})
+	return nil
 }
 
 func printInfo(info saa7164usb.FirmwareInfo) {

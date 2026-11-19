@@ -18,11 +18,17 @@ import (
 	"github.com/waya0125/recgvmvp/internal/usbfs"
 )
 
-// FirmwareName は GV-MVP/VZ 用 NXP SAA7164 ファームウェアのファイル名。
-const FirmwareName = "NXP7164F_052B04BB.bin"
+const (
+	// FirmwareName は GV-MVP/VZ 用 NXP SAA7164 ファームウェアのファイル名。
+	FirmwareName = "NXP7164F_052B04BB.bin"
+	// FirmwareNameHZ は GV-MVP/HZ 用 NXP SAA7164 ファームウェアのファイル名。
+	FirmwareNameHZ = "NXP7164F_052204BB.bin"
 
-// KnownFirmwareSHA256 は付属ドライバ（v3.21 等）に含まれる既知の NXP7164F_052B04BB.bin の SHA-256。
-const KnownFirmwareSHA256 = "586e71bc0247ffe036553a6227bf03e6479ba8ce7938017eb4497e8f23c143ea"
+	// KnownFirmwareSHA256 は GV-MVP/VZ 付属ドライバ（v3.21 等）に含まれる既知の NXP7164F_052B04BB.bin の SHA-256。
+	KnownFirmwareSHA256 = "586e71bc0247ffe036553a6227bf03e6479ba8ce7938017eb4497e8f23c143ea"
+	// KnownFirmwareSHA256HZ は GV-MVP/HZ ドライバ（v1.44 等）に含まれる既知の NXP7164F_052204BB.bin の SHA-256。
+	KnownFirmwareSHA256HZ = "162323cdb0fef9a5b0814a08a23dd8d437c2e9c0bc8803d88a9d2a4c0b91341f"
+)
 
 // FirmwareInfo はファームウェアファイルの検証結果。
 type FirmwareInfo struct {
@@ -48,14 +54,14 @@ func InspectFirmware(target string) (FirmwareInfo, error) {
 			if walkErr != nil || d.IsDir() {
 				return nil
 			}
-			if strings.EqualFold(d.Name(), FirmwareName) {
+			if strings.EqualFold(d.Name(), FirmwareName) || strings.EqualFold(d.Name(), FirmwareNameHZ) {
 				fwPath = p
 				return fs.SkipAll
 			}
 			return nil
 		})
 		if fwPath == "" {
-			return FirmwareInfo{}, fmt.Errorf("%s の中に %s が見つからない", target, FirmwareName)
+			return FirmwareInfo{}, fmt.Errorf("%s の中に %s / %s が見つからない", target, FirmwareName, FirmwareNameHZ)
 		}
 	}
 	fw, err := os.ReadFile(fwPath)
@@ -66,8 +72,12 @@ func InspectFirmware(target string) (FirmwareInfo, error) {
 		return FirmwareInfo{}, fmt.Errorf("%s が小さすぎる (%d B)", fwPath, len(fw))
 	}
 	len1 := int((binary.LittleEndian.Uint32(fw[0x10:0x14]) + binary.LittleEndian.Uint32(fw[0x14:0x18]) + 1) << 4)
-	len2 := int((binary.LittleEndian.Uint32(fw[0x1FD80:0x1FD84]) + binary.LittleEndian.Uint32(fw[0x1FD84:0x1FD88]) + 1) << 4)
-	if len1+0x10 > len(fw) || len2+0x1FD80 > len(fw) {
+	off2 := 0x10 + len1
+	if off2+0x20 > len(fw) {
+		return FirmwareInfo{}, fmt.Errorf("%s の stage1 長が不正 (len1=%d size=%d)", fwPath, len1, len(fw))
+	}
+	len2 := int((binary.LittleEndian.Uint32(fw[off2:off2+4]) + binary.LittleEndian.Uint32(fw[off2+4:off2+8]) + 1) << 4)
+	if off2+len2 > len(fw) {
 		return FirmwareInfo{}, fmt.Errorf("%s のヘッダ長が不正 (len1=%d len2=%d size=%d)", fwPath, len1, len2, len(fw))
 	}
 	sum := sha256.Sum256(fw)
@@ -79,32 +89,39 @@ func InspectFirmware(target string) (FirmwareInfo, error) {
 		Stage2Len: len2,
 		Version:   binary.LittleEndian.Uint32(fw[0x1c:0x20]),
 		SHA256:    digest,
-		KnownHash: digest == KnownFirmwareSHA256,
+		KnownHash: digest == KnownFirmwareSHA256 || digest == KnownFirmwareSHA256HZ,
 	}, nil
 }
 
-// ResolveFirmware はファームウェアファイルを探索する。
+// ResolveFirmware は GV-MVP/VZ 用ファームウェアファイルを探索する。
 func ResolveFirmware(opt string) (string, error) {
+	return ResolveFirmwareFor(opt, FirmwareName)
+}
+
+// ResolveFirmwareFor は指定されたファイル名のファームウェアを探索する。
+func ResolveFirmwareFor(opt, fwName string) (string, error) {
 	var cands []string
 	if opt != "" {
 		cands = append(cands, opt)
 	}
-	if env := os.Getenv("GVMVPVZ_FW_PATH"); env != "" {
-		cands = append(cands, env)
+	for _, envName := range []string{"GVMVP_FW_PATH", "GVMVPVZ_FW_PATH", "GVMVPHZ_FW_PATH"} {
+		if env := os.Getenv(envName); env != "" {
+			cands = append(cands, env)
+		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		cands = append(cands, filepath.Join(filepath.Dir(exe), FirmwareName))
+		cands = append(cands, filepath.Join(filepath.Dir(exe), fwName))
 	}
 	cands = append(cands,
-		filepath.Join("/usr/local/share/gvmvpvz", FirmwareName),
-		filepath.Join("/lib/firmware", FirmwareName),
+		filepath.Join("/usr/local/share/gvmvpvz", fwName),
+		filepath.Join("/lib/firmware", fwName),
 	)
 	for _, p := range cands {
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("%s が見つからない（探索先: %s）", FirmwareName, strings.Join(cands, ", "))
+	return "", fmt.Errorf("%s が見つからない（探索先: %s）", fwName, strings.Join(cands, ", "))
 }
 
 // BootFirmware はコールド状態（bcdDevice != 0x0100）の GV-MVP/VZ に DFU 2 ステージでファームを転送する。
@@ -117,8 +134,12 @@ func BootFirmware(id usbfs.ID, fwPath string, debugf func(string, ...any)) error
 		return fmt.Errorf("ファームウェアが小さすぎる (%d B)", len(fw))
 	}
 	len1 := int((binary.LittleEndian.Uint32(fw[0x10:0x14]) + binary.LittleEndian.Uint32(fw[0x14:0x18]) + 1) << 4)
-	len2 := int((binary.LittleEndian.Uint32(fw[0x1FD80:0x1FD84]) + binary.LittleEndian.Uint32(fw[0x1FD84:0x1FD88]) + 1) << 4)
-	if len1+0x10 > len(fw) || len2+0x1FD80 > len(fw) {
+	off2 := 0x10 + len1
+	if off2+0x20 > len(fw) {
+		return fmt.Errorf("ファームウェアの stage1 長が不正 (len1=%d size=%d)", len1, len(fw))
+	}
+	len2 := int((binary.LittleEndian.Uint32(fw[off2:off2+4]) + binary.LittleEndian.Uint32(fw[off2+4:off2+8]) + 1) << 4)
+	if off2+len2 > len(fw) {
 		return fmt.Errorf("ファームウェアのヘッダ長が不正 (len1=%d len2=%d size=%d)", len1, len2, len(fw))
 	}
 
@@ -128,10 +149,7 @@ func BootFirmware(id usbfs.ID, fwPath string, debugf func(string, ...any)) error
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		_, bcd, err := usbfs.ReadDeviceInfo(paths[0])
-		if err == nil && bcd == 0x0100 {
-			return nil
-		}
+		_, bcd, bcdErr := usbfs.ReadDeviceInfo(paths[0])
 		dev, err := usbfs.Open(paths[0])
 		if err != nil {
 			if debugf != nil {
@@ -140,17 +158,23 @@ func BootFirmware(id usbfs.ID, fwPath string, debugf func(string, ...any)) error
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
+		if bcdErr == nil && bcd == 0x0100 && !IsDFUDevice(dev) {
+			_ = dev.Close()
+			return nil
+		}
 		iprod := readStringDescASCII(dev, 0x20)
-		if strings.HasPrefix(iprod, "01") {
+		prod2 := readStringDescASCII(dev, 2)
+		prod3 := readStringDescASCII(dev, 3)
+		if strings.HasPrefix(iprod, "01") || strings.Contains(prod2, "Boot2") || strings.Contains(prod3, "Boot2") {
 			if debugf != nil {
-				debugf("DFU: stage 2 (%d B)", len2)
+				debugf("DFU: stage 2 (%d B) [iprod=%q prod3=%q]", len2, iprod, prod3)
 			}
-			_ = uploadDFUStage(dev, fw[0x1FD80:0x1FD80+len2])
+			_ = uploadDFUStage(dev, fw[off2:off2+len2])
 			_ = dev.Close()
 			time.Sleep(4000 * time.Millisecond)
 		} else {
 			if debugf != nil {
-				debugf("DFU: stage 1 (%d B)", len1)
+				debugf("DFU: stage 1 (%d B) [iprod=%q prod3=%q]", len1, iprod, prod3)
 			}
 			_ = uploadDFUStage(dev, fw[0x10:0x10+len1])
 			_ = dev.Close()
@@ -161,27 +185,50 @@ func BootFirmware(id usbfs.ID, fwPath string, debugf func(string, ...any)) error
 	for i := 0; i < 10; i++ {
 		if paths, err := usbfs.Find(id); err == nil && len(paths) > 0 {
 			if _, bcd, err := usbfs.ReadDeviceInfo(paths[0]); err == nil && bcd == 0x0100 {
-				return nil
+				if dev, oerr := usbfs.Open(paths[0]); oerr == nil {
+					dfu := IsDFUDevice(dev)
+					_ = dev.Close()
+					if !dfu {
+						return nil
+					}
+				} else {
+					return fmt.Errorf("再認識されたデバイス (%s) を開けない: %w", paths[0], oerr)
+				}
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return errors.New("ファームウェア転送後に bcdDevice=0x0100 として再認識されない")
+	return errors.New("ファームウェア転送後に通常モードとして再認識されない")
+}
+
+// IsDFUDevice は USB デバイスが DFU / Bootloader 状態かどうかを文字列デスクリプタから判定する。
+func IsDFUDevice(dev *usbfs.Device) bool {
+	p2 := readStringDescASCII(dev, 2)
+	p3 := readStringDescASCII(dev, 3)
+	ip := readStringDescASCII(dev, 0x20)
+	return strings.Contains(p2, "DFU") || strings.Contains(p2, "Boot") ||
+		strings.Contains(p3, "DFU") || strings.Contains(p3, "Boot") ||
+		strings.HasPrefix(ip, "01")
 }
 
 func readStringDescASCII(dev *usbfs.Device, index uint8) string {
 	var buf [128]byte
-	n, err := dev.Control(0x80, 0x06, uint16(0x0300)|uint16(index), 0x0000, buf[:], 2000)
-	if err != nil || n < 2 {
-		return ""
-	}
-	var out strings.Builder
-	for i := 2; i+1 < n; i += 2 {
-		if buf[i+1] == 0 && buf[i] >= 0x20 && buf[i] < 0x7f {
-			out.WriteByte(buf[i])
+	for _, lang := range []uint16{0x0409, 0x0000} {
+		n, err := dev.Control(0x80, 0x06, uint16(0x0300)|uint16(index), lang, buf[:], 2000)
+		if err != nil || n < 2 {
+			continue
+		}
+		var out strings.Builder
+		for i := 2; i+1 < n; i += 2 {
+			if buf[i+1] == 0 && buf[i] >= 0x20 && buf[i] < 0x7f {
+				out.WriteByte(buf[i])
+			}
+		}
+		if out.Len() > 0 {
+			return out.String()
 		}
 	}
-	return out.String()
+	return ""
 }
 
 func uploadDFUStage(dev *usbfs.Device, img []byte) error {
