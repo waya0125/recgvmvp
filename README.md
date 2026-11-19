@@ -80,11 +80,21 @@ recgvmvp CS4 10 cs4.ts
 
 ### Mirakurun (`tuners.yml`) の設定例
 
+VZ（BS/CS・地デジ）と HZ（地デジ専用）を同時に接続して運用する場合は、`--model` を明示するとチューナーが競合しません（同一 USB バス上で VZ/HZ の同時録画・ドロップ 0 を確認済み）。
+
 ```yaml
-- name: GV-MVP-VZ-GR
+- name: GV-MVP-VZ-BS
+  types:
+    - BS
+    - CS
+  command: recgvmvp --model vz <channel> - -
+  decoder: ~
+  isDisabled: false
+
+- name: GV-MVP-HZ-GR
   types:
     - GR
-  command: recgvmvp <channel> - -
+  command: recgvmvp --model hz <channel> - -
   decoder: ~
   isDisabled: false
 ```

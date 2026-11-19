@@ -52,3 +52,9 @@
 ## 5. USB ストリーム保護と WatchDog
 
 * `unit 9` の 1024-bit Diffie-Hellman 鍵交換・AES-128-ECB 相互認証・WatchDog・`EP 0x83` の AES-128-CBC TS 復号は GV-MVP/VZ（`04bb:052b`）と完全に共通で動作する。
+
+## 6. GV-MVP/VZ との同時運用（Mirakurun）
+
+* 同一 USB バス上で GV-MVP/VZ（`04bb:052b`・BS）と GV-MVP/HZ（`04bb:0522`・地デジ）を Mirakurun 経由で同時録画し、両系統とも Continuity Counter ドロップ 0・TS 同期エラー 0 で受信・解放できることを確認済み。
+* 両機とも `MaxPower 500mA` のバスパワー動作のため、ハブ等を介して同時接続する場合は電源容量に注意すること。
+* `tuners.yml` では `--model vz` / `--model hz` を明示することで、BS/CS 録画中に地デジ用チューナーを取り合う問題を避けられる。
