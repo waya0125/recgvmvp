@@ -33,7 +33,10 @@ type OpenOptions struct {
 	DevicePath string
 	Firmware   string
 	Reset      bool
-	Debugf     func(string, ...any)
+	// NoAuth が true なら IVDRM の認証と WatchDog を始めない。
+	// 選局とロック・C/N の確かめ（--check）だけに使う。TS は流せない。
+	NoAuth bool
+	Debugf func(string, ...any)
 }
 
 // Device は開いた GV-MVP/VZ。
@@ -44,6 +47,7 @@ type Device struct {
 	SessionKey [16]byte
 	WatchDog   *ivdrm.WatchDog
 	Stream     *usbfs.BulkStream
+	authed     bool
 	debugf     func(string, ...any)
 }
 
@@ -197,6 +201,11 @@ func openOne(path string, opt OpenOptions, dbg func(string, ...any)) (*Device, e
 	dbg("prepareStreamUnit")
 	c.PrepareStreamUnit()
 
+	if opt.NoAuth {
+		dbg("open OK (NoAuth: IVDRM の認証をしない)")
+		return &Device{USB: usb, Client: c, debugf: dbg}, nil
+	}
+
 	dbg("runIvdrmAuth")
 	var sid uint32
 	sessKey, err := ivdrm.RunAuth(c, 0)
@@ -223,6 +232,7 @@ func openOne(path string, opt OpenOptions, dbg func(string, ...any)) (*Device, e
 		SessionID:  sid,
 		SessionKey: sessKey,
 		WatchDog:   wd,
+		authed:     true,
 		debugf:     dbg,
 	}, nil
 }
@@ -290,6 +300,9 @@ func (d *Device) TuneISDBS(freqKHz uint32, tsid uint16, stopCh <-chan struct{}) 
 
 // StartStream は EP83 の非同期受信を開始してから Unit 8 を RUN にする。
 func (d *Device) StartStream(onChunk func([]byte)) error {
+	if !d.authed {
+		return errors.New("NoAuth で開いた機器では TS を流せない")
+	}
 	stream, err := d.USB.StartBulkStream(streamEndpoint, urbCount, urbSize, onChunk)
 	if err != nil {
 		return err
@@ -327,7 +340,7 @@ func (d *Device) Close() {
 		d.WatchDog.Stop()
 		d.WatchDog = nil
 	}
-	if d.Client != nil {
+	if d.Client != nil && d.authed {
 		ivdrm.CloseSession(d.Client, d.SessionID)
 	}
 	if d.USB != nil {

@@ -195,7 +195,9 @@ func TuneISDBT(c *saa7164usb.Client, hz uint32) error {
 	return nil
 }
 
-// LockISDBT は地デジの復調がロックしているかを返す（0x80 と 0xb0 を読む。tc90522 と同じ見方）。
+// LockISDBT は地デジの復調がロックしているかを返す（0x80 と 0xb0 を読む）。
+// 0x80 は下位 6 ビットがすべて 0 のときだけロックとみなす（BonDriver_GVMVPVZ_T と同じ）。
+// 以前は 0x28 だけを見ていたため、0x47 のような値でもロックと判定し、電波の無い ch でも lock=yes になっていた。
 func LockISDBT(c *saa7164usb.Client) (locked bool, r80, rb0 byte, err error) {
 	v, err := c.I2CRead(DemodT, 0x80, 1)
 	if err != nil {
@@ -207,7 +209,7 @@ func LockISDBT(c *saa7164usb.Client) (locked bool, r80, rb0 byte, err error) {
 		return false, r80, 0, err
 	}
 	rb0 = w[0]
-	return r80&0x28 == 0 && rb0&0x0f >= 8, r80, rb0, nil
+	return r80&0x3f == 0 && rb0&0x0f >= 8, r80, rb0, nil
 }
 
 // CNRawISDBT は地デジ復調の C/N 用の生値（レジスタ 0x8b〜0x8d の 24 ビットビッグエンディアン）を読む。

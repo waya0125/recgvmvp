@@ -144,6 +144,7 @@ func run(o *options, stderr io.Writer) error {
 		DevicePath: o.device,
 		Firmware:   o.firmware,
 		Reset:      o.reset,
+		NoAuth:     o.check, // --check は選局とロックを見るだけなので、IVDRM の認証をしない
 		Debugf:     dbg,
 	})
 	if err != nil {
