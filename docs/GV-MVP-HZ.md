@@ -7,6 +7,7 @@
 | USB ID | `04bb:0522`（USB 2.0 High-Speed） |
 | ブリッジチップ | NXP SAA7164 USB 版 |
 | チューナー・復調モジュール | `CTUNERID_8B_SAIGAWA`（`TunerID=0x8b` / 地上デジタル ISDB-T 専用、BS/110度CS 非対応） |
+| チューナー構成 | **1T（地上デジタル専用シングルチューナー）** — 地上デジタル（ISDB-T）1 波のみ受信（BS/110度CS には非対応） |
 | B-CAS | 本体スロット（`unit 9` `ISDBCASProp` / `IVDRMProp` 搭載） |
 | ファームウェア | `NXP7164F_052204BB.bin`（サイズ `3,262,000` B、SHA-256: `162323cdb0fef9a5b0814a08a23dd8d437c2e9c0bc8803d88a9d2a4c0b91341f`） |
 
