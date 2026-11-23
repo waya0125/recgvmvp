@@ -5,6 +5,9 @@ I-O DATA **GV-MVP/VZ**（`04bb:052b`、地上デジタル・BS・110度CS）お�
 * 本体スロットに挿入した B-CAS カードでハードウェア復号された TS が出力されます（外部カードリーダー・`b25` デコーダ不要）。
 * IVDRM セッション制御・TS 復号手順は nuIlpointer 氏の [BonDriver_GVMVPVZ_T](https://github.com/nuIlpointer/BonDriver_GVMVPVZ)（MIT）および Linux 移植版を参考にしています。
 * デバイスの技術仕様・特性の詳細は [docs/GV-MVP-VZ.md](./docs/GV-MVP-VZ.md) および [docs/GV-MVP-HZ.md](./docs/GV-MVP-HZ.md) を参照してください。
+* **Windows（TVTest / EDCB 等）向け BonDriver**:
+  * **GV-MVP/VZ（`04bb:052b`）**: [BonDriver_GVMVPVZ](https://github.com/nuIlpointer/BonDriver_GVMVPVZ)（nuIlpointer 氏）
+  * **GV-MVP/HZ（`04bb:0522`）**: [BonDriver_GVMVPHZ](https://github.com/waya0125/BonDriver_GVMVPHZ)（WinUSB / Zadig 対応）
 
 ## ビルドとインストール
 
