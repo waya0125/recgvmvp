@@ -1,15 +1,36 @@
 # recgvmvp
 
-I-O DATA **GV-MVP/VZ**（`04bb:052b`、地上デジタル・BS・110度CS）および **GV-MVP/HZ**（`04bb:0522`、地上デジタル専用）を Linux 単体で操作し、MPEG-2 TS を出力する純 Go 製コマンドです（cgo・libusb 不要、Linux `usbfs` 直叩き）。
+I-O DATA の USB テレビチューナー GV-MVP/VZ と GV-MVP/HZ を Linux で使う、録画コマンドです。  
+Go だけで書いた 1 つのバイナリで、cgo・libusb を使わず、Linux の `usbfs` で機器を直接操作します。  
+本体のスロットに挿した B-CAS カードで復号された TS を出すので、外付けのカードリーダーや `b25` は不要です。
 
-* 本体スロットに挿入した B-CAS カードでハードウェア復号された TS が出力されます（外部カードリーダー・`b25` デコーダ不要）。
-* IVDRM セッション制御・TS 復号手順は nuIlpointer 氏の [BonDriver_GVMVPVZ_T](https://github.com/nuIlpointer/BonDriver_GVMVPVZ)（MIT）および Linux 移植版を参考にしています。
-* デバイスの技術仕様・特性の詳細は [docs/GV-MVP-VZ.md](./docs/GV-MVP-VZ.md) および [docs/GV-MVP-HZ.md](./docs/GV-MVP-HZ.md) を参照してください。
-* **Windows（TVTest / EDCB 等）向け BonDriver**:
-  * **GV-MVP/VZ（`04bb:052b`）**: [BonDriver_GVMVPVZ](https://github.com/nuIlpointer/BonDriver_GVMVPVZ)（nuIlpointer 氏）
-  * **GV-MVP/HZ（`04bb:0522`）**: [BonDriver_GVMVPHZ](https://github.com/waya0125/BonDriver_GVMVPHZ)（WinUSB / Zadig 対応）
+## 対応機種
 
-## ビルドとインストール
+| 機種 | USB ID | 放送波 | B-CAS | 詳細・動作確認 |
+|---|---|---|---|---|
+| I-O DATA GV-MVP/VZ | `04bb:052b` | 地デジ・BS・110 度 CS（1 チューナー） | 本体のスロット | [docs/GV-MVP-VZ.md](docs/GV-MVP-VZ.md) |
+| I-O DATA GV-MVP/HZ | `04bb:0522` | 地デジ（1 チューナー） | 本体のスロット | [docs/GV-MVP-HZ.md](docs/GV-MVP-HZ.md) |
+
+## 関連プロジェクト
+
+- Windows（TVTest・EDCB）で使う BonDriver
+  - GV-MVP/VZ: nuIlpointer 氏の [BonDriver_GVMVPVZ](https://github.com/nuIlpointer/BonDriver_GVMVPVZ)
+  - GV-MVP/HZ: [BonDriver_GVMVPHZ](https://github.com/waya0125/BonDriver_GVMVPHZ)
+- 手元のチューナーの動作確認の一覧: [チューナー動作確認一覧](https://waya0125.github.io/tuners/)
+
+## 必要なもの
+
+- 純正ドライバーに入っているファームウェア（電源を入れた直後の機器を使うとき）
+  - GV-MVP/VZ: `NXP7164F_052B04BB.bin`
+  - GV-MVP/HZ: `NXP7164F_052204BB.bin`
+- 純正ドライバーの入手元（I-O DATA のサポートライブラリ）
+  - GV-MVP/VZ: [製品ページ](https://www.iodata.jp/product/av/tidegi/gv-mvpvz/)・[サポートライブラリ](https://www.iodata.jp/lib/product/g/3338.htm)
+  - GV-MVP/HZ: [製品ページ](https://www.iodata.jp/product/av/tidegi/gv-mvphz/)・[サポートライブラリ](https://www.iodata.jp/lib/product/g/2095.htm)
+- BS・110 度 CS を受けるときは、アンテナへの電源（この機器は電源を出しません）
+
+ファームウェアはメーカーの著作物なので、このリポジトリには含めていません。
+
+## ビルド
 
 ```bash
 go build -o bin/recgvmvp ./cmd/recgvmvp
@@ -17,7 +38,13 @@ go build -o bin/gvmvp-firmware ./cmd/gvmvp-firmware
 go test ./...
 ```
 
-※ Docker を使う場合は `./scripts/go.sh build -o bin/recgvmvp ./cmd/recgvmvp` のようにビルドできます。
+手元に Go を入れない場合は、Docker の Go でビルドできます。
+
+```bash
+./scripts/go.sh build -o bin/recgvmvp ./cmd/recgvmvp
+```
+
+## 準備
 
 ### udev ルール（一般ユーザーで実行する場合）
 
@@ -26,20 +53,19 @@ sudo cp udev/99-gvmvpvz.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 ```
 
-## ファームウェア
+### ファームウェア
 
-電源投入直後（コールド状態 / DFU 状態）の機器を使う場合は、純正ドライバ等から対応ファームウェアを取り出して次のいずれかに配置してください（上から順に探索します）。すでにウォーム状態の場合は不要です。
-
-* GV-MVP/VZ（`04bb:052b`）: `NXP7164F_052B04BB.bin`
-* GV-MVP/HZ（`04bb:0522`）: `NXP7164F_052204BB.bin`
+電源を入れた直後（コールド状態・DFU 状態）の機器を使う場合は、純正ドライバーからファームウェアを取り出して、次のどれかに置きます。  
+上から順に探します。  
+すでにウォーム状態なら不要です。
 
 1. `--firmware` / `--fw` で指定したパス
 2. 環境変数 `GVMVP_FW_PATH` / `GVMVPVZ_FW_PATH` / `GVMVPHZ_FW_PATH`
-3. `recgvmvp` 実行ファイルと同じディレクトリ
+3. `recgvmvp` の実行ファイルと同じディレクトリ
 4. `/usr/local/share/gvmvpvz/<ファイル名>`
 5. `/lib/firmware/<ファイル名>`
 
-付属の `gvmvp-firmware` コマンドでドライバフォルダからの探索・SHA-256 照合・配置ができます：
+付属の `gvmvp-firmware` コマンドで、ドライバーのフォルダーからの探索・SHA-256 の照合・配置ができます。
 
 ```bash
 ./bin/gvmvp-firmware verify /path/to/Driver
@@ -81,11 +107,11 @@ recgvmvp BS15_0 - - > bs.ts
 recgvmvp CS4 10 cs4.ts
 ```
 
-### Mirakurun (`tuners.yml`) の設定例
+### Mirakurun（`tuners.yml`）の設定例
 
-VZ（BS/CS・地デジ）と HZ（地デジ専用）を同時に接続して運用する場合は、`--model` を明示するとチューナーが競合しません（同一 USB バス上で VZ/HZ の同時録画・ドロップ 0 を確認済み）。
-
-※ GV-MVP/VZ は **1TS（シングルチューナー）** のため、1 台で地デジと BS/CS を同時受信することはできません。VZ 単体で地デジ・BS・CS すべてを受ける場合は、`types: [GR, BS, CS]` を 1 つのエントリにまとめて設定してください。
+VZ（BS・CS・地デジ）と HZ（地デジだけ）を同時につなぐ場合は、`--model` を指定するとチューナーを取り合いません。  
+GV-MVP/VZ は 1 チューナーなので、1 台で地デジと BS・CS を同時には受けられません。  
+VZ 1 台で地デジ・BS・CS を全部受ける場合は、`types: [GR, BS, CS]` を 1 つのエントリにまとめてください。
 
 ```yaml
 - name: GV-MVP-VZ-BS
@@ -104,31 +130,26 @@ VZ（BS/CS・地デジ）と HZ（地デジ専用）を同時に接続して運�
   isDisabled: false
 ```
 
-## 録画性能・実測結果
+## 付属コマンド
 
-実機環境（Linux / `usbfs` 直叩き、Mirakurun 経由および単体実行）での確認結果は以下の通りです。
-
-* **出力開始までの時間（ウォーム状態）**: コマンド起動から約 **0.1〜0.2 秒** で TS ストリーミング開始（B-CAS ハードウェア復号・IVDRM 認証込み）。
-* **ドロップ・TS 品質**:
-  * 地デジ（UHF）・BS・110度CS いずれも 60 秒連続録画で **ドロップ 0 / TEI 0 / 同期ずれ 0** を確認。
-  * PT3 および torne（`recpt1` / `recdvb` 等）との同一チャンネル同時比較録画（10 秒・60 秒）でも、パケット数・ビットレート・PAT/PMT 構成が同等であることを確認。
-* **同時運用・連続再オープン**:
-  * 同一 USB バス上で GV-MVP/VZ（BS/CS）と GV-MVP/HZ（地デジ）を同時録画し、双方とも **ドロップ 0** で安定動作。
-  * ウォーム状態からの連続再オープンや、VZ での BS/CS ⇔ 地デジ切替も問題なく動作。
-* **ホスト CPU 負荷**: 本体スロットの B-CAS でハードウェア復号済みの TS が出力されるため、ホスト側でソフトウェア `b25` 復号を行う必要がありません。
+| コマンド | 中身 |
+|---|---|
+| `cmd/recgvmvp` | 録画のコマンド（`recpt1` 互換の引数） |
+| `cmd/gvmvp-firmware` | ファームウェアの検証・配置・手動転送 |
+| `cmd/gvmvp-probe` | 低レベルの USB コマンド・B-CAS の状態の確認（開発用） |
+| `cmd/gvmvp-tune` | 選局・ロックの確認（開発用） |
 
 ## 注意事項
 
-* **BS/CS アンテナ電源**: 本機はアンテナ線への電源供給を行いません。BS/CS を受信する場合は、分配器や別機器からアンテナへ給電されている環境でご使用ください。
-* **強制終了の禁止**: `kill -9` 等で終了すると機器側の WatchDog によりロックされる場合があります。通常は `SIGINT` / `SIGTERM` で終了し、ロックされた場合は `--reset` または USB の抜き差しで回復してください。
+- **BS・CS のアンテナ電源**: この機器はアンテナ線に電源を出しません。  
+  BS・CS を受けるときは、分配器やほかの機器からアンテナに電源が出ている環境で使ってください。
+- **強制終了**: `kill -9` などで止めると、機器側の WatchDog でロックされることがあります。  
+  ふだんは `SIGINT` / `SIGTERM` で止めてください。  
+  ロックされた場合は、`--reset` か USB の抜き差しで戻ります。
+- **同時接続の電源**: VZ・HZ ともバスパワーで最大 500mA を使います。  
+  ハブ経由で同時につなぐ場合は、電源の容量に気をつけてください。
 
-## 付属コマンド
+## ライセンス・出典
 
-* `cmd/recgvmvp`: 本番録画コマンド（`recpt1` 互換 CLI）
-* `cmd/gvmvp-firmware`: ファームウェア検証・配置・手動転送
-* `cmd/gvmvp-probe`: 低レベル USB コマンド / B-CAS ステータス確認（開発用）
-* `cmd/gvmvp-tune`: 選局・ロック確認（開発用）
-
-## ライセンス
-
-MIT License（[LICENSE](./LICENSE)）
+- MIT License（[LICENSE](./LICENSE)）
+- IVDRM のセッション制御と TS の復号の手順は、nuIlpointer 氏の [BonDriver_GVMVPVZ](https://github.com/nuIlpointer/BonDriver_GVMVPVZ)（MIT）と Linux 移植版を参考にしています。
