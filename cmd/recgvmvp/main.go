@@ -151,7 +151,7 @@ type tunerDevice interface {
 
 type vzAdapter struct{ *gvmvpvz.Device }
 
-func (a vzAdapter) SessionKeyBytes() [16]byte    { return a.SessionKey }
+func (a vzAdapter) SessionKeyBytes() [16]byte     { return a.SessionKey }
 func (a vzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
 func (a vzAdapter) CheckStatus(ch channel.Channel) string {
 	if ch.System == channel.ISDBT {
@@ -174,7 +174,7 @@ func (a vzAdapter) CheckStatus(ch channel.Channel) string {
 
 type hzAdapter struct{ *gvmvphz.Device }
 
-func (a hzAdapter) SessionKeyBytes() [16]byte    { return a.SessionKey }
+func (a hzAdapter) SessionKeyBytes() [16]byte     { return a.SessionKey }
 func (a hzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
 func (a hzAdapter) CheckStatus(ch channel.Channel) string {
 	_, _, lk, _ := saigawa.ReadLock(a.Client)
