@@ -142,6 +142,11 @@ type WatchDog struct {
 	stopCh     chan struct{}
 	doneCh     chan struct{}
 	once       sync.Once
+
+	errMu   sync.Mutex
+	err     error
+	errCh   chan struct{}
+	errOnce sync.Once
 }
 
 // StartWatchDog は WatchDogInit と初回キックを行い、2 秒周期の更新ゴルーチンを開始する。
@@ -157,24 +162,58 @@ func StartWatchDog(c *saa7164usb.Client, sessionKey [16]byte) (*WatchDog, error)
 		counter:    1,
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
+		errCh:      make(chan struct{}),
 	}
 	var wdInit [12]byte
 	binary.LittleEndian.PutUint32(wdInit[0:4], 7)
 	binary.LittleEndian.PutUint64(wdInit[4:12], w.counter)
-	_, _ = c.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 6, wdInit[:])
-	w.kickOnce()
+	if _, err := c.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 6, wdInit[:]); err != nil {
+		return nil, fmt.Errorf("WatchDog 初期化失敗: %w", err)
+	}
+	if err := w.kickOnce(); err != nil {
+		return nil, fmt.Errorf("WatchDog 初回キック失敗: %w", err)
+	}
 
 	go w.loop()
 	return w, nil
 }
 
-func (w *WatchDog) kickOnce() {
+// ErrCh は WatchDog が致命的な異常を検知したときに閉じられるチャネルを返す。
+func (w *WatchDog) ErrCh() <-chan struct{} {
+	if w == nil {
+		return nil
+	}
+	return w.errCh
+}
+
+// Err は WatchDog が検知した異常を返す。正常時は nil。
+func (w *WatchDog) Err() error {
+	if w == nil {
+		return nil
+	}
+	w.errMu.Lock()
+	defer w.errMu.Unlock()
+	return w.err
+}
+
+func (w *WatchDog) setErr(err error) {
+	w.errMu.Lock()
+	if w.err == nil {
+		w.err = err
+	}
+	w.errMu.Unlock()
+	w.errOnce.Do(func() { close(w.errCh) })
+}
+
+func (w *WatchDog) kickOnce() error {
 	w.counter++
 	clients := [3]struct{ id, magic uint32 }{
 		{1, 0x4a73f812},
 		{2, 0xf94c36dc},
 		{4, 0x71c0e12d},
 	}
+	var firstErr error
+	failCount := 0
 	for _, cl := range clients {
 		var plain [16]byte
 		var pkt [20]byte
@@ -182,8 +221,30 @@ func (w *WatchDog) kickOnce() {
 		binary.LittleEndian.PutUint32(plain[8:12], cl.id)
 		binary.LittleEndian.PutUint32(plain[12:16], cl.magic)
 		w.blk.Encrypt(pkt[4:20], plain[:])
-		_, _ = w.client.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 7, pkt[:])
+		if _, err := w.client.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 7, pkt[:]); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			failCount++
+		}
 	}
+	if failCount == len(clients) {
+		return fmt.Errorf("WatchDog キックの返事がない (cnt=%d): %w", w.counter, firstErr)
+	}
+	// 10 周期ごと（20 秒ごと）、または一部失敗があった周期で WatchDogGetStatus (sel=8) を確認する。
+	if failCount > 0 || w.counter%10 == 0 {
+		resp, err := w.client.Command(saa7164usb.UnitCAS, saa7164usb.GetCur, 8, make([]byte, 4))
+		if err != nil {
+			return fmt.Errorf("WatchDog 状態取得失敗 (cnt=%d): %w", w.counter, err)
+		}
+		if len(resp) >= 4 {
+			st := binary.LittleEndian.Uint32(resp[:4])
+			if st != 1 {
+				return fmt.Errorf("WatchDog 状態異常 (status=0x%x, cnt=%d)", st, w.counter)
+			}
+		}
+	}
+	return nil
 }
 
 func (w *WatchDog) loop() {
@@ -195,7 +256,15 @@ func (w *WatchDog) loop() {
 		case <-w.stopCh:
 			return
 		case <-tk.C:
-			w.kickOnce()
+			if err := w.kickOnce(); err != nil {
+				select {
+				case <-w.stopCh:
+					return
+				default:
+				}
+				w.setErr(err)
+				return
+			}
 		}
 	}
 }

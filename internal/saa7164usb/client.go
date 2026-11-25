@@ -133,6 +133,7 @@ func (c *Client) Command(unit uint8, command uint32, sel uint16, data []byte) ([
 	var respData []byte
 	buf := make([]byte, MaxMessage)
 	skips := 0
+	const maxSkips = 32
 	for i := 0; i < 64; i++ {
 		n, err := c.Dev.Transfer(c.In, buf, c.TimeoutMS)
 		if err != nil {
@@ -142,8 +143,12 @@ func (c *Client) Command(unit uint8, command uint32, sel uint16, data []byte) ([
 		if err != nil {
 			return respData, err
 		}
-		if (h.ID != unit || h.ControlSelector != sel) && skips < 8 {
+		if h.ID != unit || h.ControlSelector != sel || h.SeqNo != tag {
 			skips++
+			if skips > maxSkips {
+				return respData, fmt.Errorf("期待しない返事が多すぎる: got unit=%d sel=0x%x seq=%d, want unit=%d sel=0x%x seq=%d",
+					h.ID, h.ControlSelector, h.SeqNo, unit, sel, tag)
+			}
 			continue
 		}
 		respData = append(respData, d...)

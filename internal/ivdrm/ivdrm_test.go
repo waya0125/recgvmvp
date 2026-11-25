@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"errors"
 	"testing"
 )
 
@@ -81,5 +82,30 @@ func TestTSDecryptor(t *testing.T) {
 	}
 	if !bytes.Equal(out, wantPlain) {
 		t.Fatalf("decrypted TS mismatch: got %d bytes", len(out))
+	}
+}
+
+func TestWatchDogErrNotification(t *testing.T) {
+	var nilWD *WatchDog
+	if nilWD.ErrCh() != nil || nilWD.Err() != nil {
+		t.Fatal("nil WatchDog should return nil ErrCh and Err")
+	}
+
+	w := &WatchDog{errCh: make(chan struct{})}
+	if w.Err() != nil {
+		t.Fatalf("initial Err = %v, want nil", w.Err())
+	}
+
+	wantErr := errors.New("kick timeout")
+	w.setErr(wantErr)
+	w.setErr(errors.New("second error should be ignored"))
+
+	select {
+	case <-w.ErrCh():
+	default:
+		t.Fatal("ErrCh was not closed after setErr")
+	}
+	if !errors.Is(w.Err(), wantErr) {
+		t.Fatalf("Err = %v, want %v", w.Err(), wantErr)
 	}
 }

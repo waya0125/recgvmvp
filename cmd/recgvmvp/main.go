@@ -150,6 +150,7 @@ type tunerDevice interface {
 	Close()
 	SessionKeyBytes() [16]byte
 	BulkStream() *usbfs.BulkStream
+	WatchDogRef() *ivdrm.WatchDog
 	CheckStatus(ch channel.Channel) string
 	ReadTSIDs() ([]uint16, error)
 }
@@ -158,6 +159,7 @@ type vzAdapter struct{ *gvmvpvz.Device }
 
 func (a vzAdapter) SessionKeyBytes() [16]byte     { return a.SessionKey }
 func (a vzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
+func (a vzAdapter) WatchDogRef() *ivdrm.WatchDog  { return a.WatchDog }
 func (a vzAdapter) ReadTSIDs() ([]uint16, error)  { return sonylj.ReadTSIDs(a.Client) }
 func (a vzAdapter) CheckStatus(ch channel.Channel) string {
 	if ch.System == channel.ISDBT {
@@ -182,6 +184,7 @@ type hzAdapter struct{ *gvmvphz.Device }
 
 func (a hzAdapter) SessionKeyBytes() [16]byte     { return a.SessionKey }
 func (a hzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
+func (a hzAdapter) WatchDogRef() *ivdrm.WatchDog  { return a.WatchDog }
 func (a hzAdapter) ReadTSIDs() ([]uint16, error) {
 	return nil, errors.New("GV-MVP/HZ は BS/110度CS（ISDB-S）非対応")
 }
@@ -323,8 +326,15 @@ func run(o *options, stderr io.Writer) error {
 		outWriter = f
 	}
 
+	const (
+		tsInitialTimeout = 10 * time.Second
+		tsStallTimeout   = 5 * time.Second
+	)
+
 	var firstRead atomic.Bool
 	var dropped atomic.Uint64
+	var lastRecvNano atomic.Int64
+	lastRecvNano.Store(time.Now().UnixNano())
 	tsCh := make(chan []byte, 512)
 	dec, err := ivdrm.NewTSDecryptor(dev.SessionKeyBytes(), func(tsc uint8) {
 		dbg("TS key received (tsc=%d)", tsc)
@@ -334,6 +344,7 @@ func run(o *options, stderr io.Writer) error {
 	}
 
 	if err := dev.StartStream(func(chunk []byte) {
+		lastRecvNano.Store(time.Now().UnixNano())
 		if !firstRead.Swap(true) {
 			dbg("EP83 first read %d B", len(chunk))
 		}
@@ -363,6 +374,11 @@ func run(o *options, stderr io.Writer) error {
 	// 止まったままの Write はプロセスの終了で捨てる。
 	w := startWriter(outWriter)
 
+	wd := dev.WatchDogRef()
+	wdErrCh := wd.ErrCh()
+	healthTk := time.NewTicker(200 * time.Millisecond)
+	defer healthTk.Stop()
+
 	var totalBytes uint64
 	started := false
 	startTime := time.Now()
@@ -376,6 +392,8 @@ loop:
 		case <-timerCh:
 			timedOut = true
 			break loop
+		case <-wdErrCh:
+			return fmt.Errorf("WatchDog 異常: %w", wd.Err())
 		case err := <-w.errCh:
 			return fmt.Errorf("書き込み失敗: %w", err)
 		case pkt := <-tsCh:
@@ -387,13 +405,23 @@ loop:
 			case w.ch <- pkt:
 			case <-stopCh:
 				break loop
+			case <-wdErrCh:
+				return fmt.Errorf("WatchDog 異常: %w", wd.Err())
 			case err := <-w.errCh:
 				return fmt.Errorf("書き込み失敗: %w", err)
 			}
 			totalBytes += uint64(len(pkt))
-		case <-time.After(200 * time.Millisecond):
+		case <-healthTk.C:
 			if st := dev.BulkStream(); st != nil && st.DeviceGone() {
 				return errors.New("USB デバイスが切断された")
+			}
+			gap := time.Since(time.Unix(0, lastRecvNano.Load()))
+			limit := tsInitialTimeout
+			if firstRead.Load() {
+				limit = tsStallTimeout
+			}
+			if gap >= limit {
+				return fmt.Errorf("TS が %.1f 秒以上届かないため終了する", gap.Seconds())
 			}
 		}
 	}
