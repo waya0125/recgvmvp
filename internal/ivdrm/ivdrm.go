@@ -75,7 +75,20 @@ func RunAuth(c *saa7164usb.Client, sessionID uint32) ([16]byte, error) {
 	binary.LittleEndian.PutUint32(openBuf[1:5], sessionID)
 	resp, err := c.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 2, openBuf[:])
 	if err != nil || len(resp) < 9 || binary.LittleEndian.Uint32(resp[5:9]) != 0 {
-		return key, fmt.Errorf("IVDRM open session %d failed: %w", sessionID, err)
+		// 前回異常終了や WatchDog 切れ直後でセッションが詰まっている場合、
+		// WatchDogInit (sel=6) を入れてから CloseSession / IVDRM_Init / OpenSession をやり直す。
+		var wdInit [12]byte
+		binary.LittleEndian.PutUint32(wdInit[0:4], 7)
+		binary.LittleEndian.PutUint64(wdInit[4:12], 1)
+		_, _ = c.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 6, wdInit[:])
+		CloseSession(c, 0)
+		CloseSession(c, 1)
+		_, _ = c.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 0, []byte{0})
+		_, _ = c.Command(saa7164usb.UnitCAS, saa7164usb.GetCur, 1, make([]byte, 4))
+		resp, err = c.Command(saa7164usb.UnitCAS, saa7164usb.SetCur, 2, openBuf[:])
+		if err != nil || len(resp) < 9 || binary.LittleEndian.Uint32(resp[5:9]) != 0 {
+			return key, fmt.Errorf("IVDRM open session %d failed: %w", sessionID, err)
+		}
 	}
 
 	var expA [16]byte
