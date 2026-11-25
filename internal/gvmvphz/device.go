@@ -24,8 +24,8 @@ var ErrNoDevice = errors.New("使える GV-MVP/HZ（04bb:0522）が見つから�
 
 const (
 	streamEndpoint = 0x83
-	urbCount       = 8
-	urbSize        = 32768
+	urbCount       = 32
+	urbSize        = 42112 // 0xa480 (224 TS packets): matches SAA7164 USB bulk block size
 )
 
 // OpenOptions はデバイスオープン時の設定。

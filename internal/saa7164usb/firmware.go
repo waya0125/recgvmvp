@@ -24,9 +24,11 @@ const (
 	// FirmwareNameHZ は GV-MVP/HZ 用 NXP SAA7164 ファームウェアのファイル名。
 	FirmwareNameHZ = "NXP7164F_052204BB.bin"
 
-	// KnownFirmwareSHA256 は GV-MVP/VZ 付属ドライバ（v3.21 等）に含まれる既知の NXP7164F_052B04BB.bin の SHA-256。
+	// KnownFirmwareSHA256 は GV-MVP/VZ 付属ドライバ（v3.21 等、版 0x00011d07）に含まれる既知の NXP7164F_052B04BB.bin の SHA-256。
 	KnownFirmwareSHA256 = "586e71bc0247ffe036553a6227bf03e6479ba8ce7938017eb4497e8f23c143ea"
-	// KnownFirmwareSHA256HZ は GV-MVP/HZ ドライバ（v1.44 等）に含まれる既知の NXP7164F_052204BB.bin の SHA-256。
+	// KnownFirmwareSHA256V419 は GV-MVP/VZ ドライバ（v4.19 等、版 0x00021d14）に含まれる既知の NXP7164F_052B04BB.bin の SHA-256。
+	KnownFirmwareSHA256V419 = "075310d9f51ee62e637bbf0f7232018a60447fcdf3baca5d4b0e7884cbeafdd6"
+	// KnownFirmwareSHA256HZ は GV-MVP/HZ ドライバ（v1.44 等、版 0x00021d0f）に含まれる既知の NXP7164F_052204BB.bin の SHA-256。
 	KnownFirmwareSHA256HZ = "162323cdb0fef9a5b0814a08a23dd8d437c2e9c0bc8803d88a9d2a4c0b91341f"
 )
 
@@ -89,7 +91,7 @@ func InspectFirmware(target string) (FirmwareInfo, error) {
 		Stage2Len: len2,
 		Version:   binary.LittleEndian.Uint32(fw[0x1c:0x20]),
 		SHA256:    digest,
-		KnownHash: digest == KnownFirmwareSHA256 || digest == KnownFirmwareSHA256HZ,
+		KnownHash: digest == KnownFirmwareSHA256 || digest == KnownFirmwareSHA256V419 || digest == KnownFirmwareSHA256HZ,
 	}, nil
 }
 

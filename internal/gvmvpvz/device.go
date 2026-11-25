@@ -24,8 +24,8 @@ var ErrNoDevice = errors.New("使える GV-MVP/VZ（04bb:052b）が見つから�
 
 const (
 	streamEndpoint = 0x83
-	urbCount       = 8
-	urbSize        = 32768
+	urbCount       = 32
+	urbSize        = 42112 // 0xa480 (224 TS packets): matches PhilMAS64.sys DgtlTransportOutAllocatorPropertyHandler
 )
 
 // OpenOptions はデバイスオープン時の設定。

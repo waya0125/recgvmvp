@@ -79,7 +79,7 @@ Mirakurun の設定例は [README](../README.md) にあります。
     * `unit 8`: TS 出力ポート状態制御（`STOP=0`, `ACQUIRE=1`, `PAUSE=2`, `RUN=3`）
     * `unit 9`: IVDRM セッション・WatchDog（`sel 0x00..0x08`）、B-CAS 制御（`sel 0x1e..0x22`）
 * **IF2 (`EP 0x83` IN bulk)**:
-  * MPEG-2 TS ストリーム出力。`recgvmvp` では `usbfs` の非同期 URB キュー（8 本 × 32 KiB）で受信する。
+  * MPEG-2 TS ストリーム出力。`recgvmvp` では `usbfs` の非同期 URB キュー（32 本 × 42,112 B = `0xa480`、SAA7164 の 1 転送ブロック＝224 TS パケットと一致）で受信する。
 
 ### 6.3 コールドブートとウォーム状態
 
