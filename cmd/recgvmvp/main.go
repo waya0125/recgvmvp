@@ -101,7 +101,11 @@ func parseArgs(args []string, stderr io.Writer) (*options, error) {
 		return nil, err
 	}
 	if o.tsid != 0 {
+		if ch.System != channel.ISDBS {
+			return nil, errors.New("--tsid は BS/CS だけ")
+		}
 		ch.TSID = o.tsid
+		ch.ExplicitTSID = true
 	}
 	o.ch = ch
 
@@ -147,12 +151,14 @@ type tunerDevice interface {
 	SessionKeyBytes() [16]byte
 	BulkStream() *usbfs.BulkStream
 	CheckStatus(ch channel.Channel) string
+	ReadTSIDs() ([]uint16, error)
 }
 
 type vzAdapter struct{ *gvmvpvz.Device }
 
 func (a vzAdapter) SessionKeyBytes() [16]byte     { return a.SessionKey }
 func (a vzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
+func (a vzAdapter) ReadTSIDs() ([]uint16, error)  { return sonylj.ReadTSIDs(a.Client) }
 func (a vzAdapter) CheckStatus(ch channel.Channel) string {
 	if ch.System == channel.ISDBT {
 		lk, _, _, _ := sonylj.LockISDBT(a.Client)
@@ -176,6 +182,9 @@ type hzAdapter struct{ *gvmvphz.Device }
 
 func (a hzAdapter) SessionKeyBytes() [16]byte     { return a.SessionKey }
 func (a hzAdapter) BulkStream() *usbfs.BulkStream { return a.Stream }
+func (a hzAdapter) ReadTSIDs() ([]uint16, error) {
+	return nil, errors.New("GV-MVP/HZ は BS/110度CS（ISDB-S）非対応")
+}
 func (a hzAdapter) CheckStatus(ch channel.Channel) string {
 	_, _, lk, _ := saigawa.ReadLock(a.Client)
 	str, _ := saigawa.ReadSignalStrength(a.Client)
@@ -280,7 +289,7 @@ func run(o *options, stderr io.Writer) error {
 			return err
 		}
 	} else {
-		if _, err := dev.TuneISDBS(o.ch.FreqKHz, o.ch.TSID, stopCh); err != nil {
+		if err := tuneISDBS(dev, o.ch, o.check, stopCh, stderr, dbg); err != nil {
 			return err
 		}
 	}
@@ -297,6 +306,10 @@ func run(o *options, stderr io.Writer) error {
 		}
 		return nil
 	}
+
+	// 読み手がいなくなった標準出力へ書いたときに SIGPIPE で即死せず、
+	// EPIPE を受けて機器の後始末をしてから終わる（WatchDog のロックを避ける）。
+	signal.Ignore(syscall.SIGPIPE)
 
 	var outWriter io.Writer
 	if o.output == "-" {
@@ -345,9 +358,15 @@ func run(o *options, stderr io.Writer) error {
 		timerCh = t.C
 	}
 
+	// 書き出しは別のゴルーチンで行う。出力先のパイプが読まれなくなって Write が止まっても、
+	// シグナルを受けたらそれを待たずに機器の後始末（unit 8 STOP・WatchDog 停止・セッション終了）へ進む（issue #2）。
+	// 止まったままの Write はプロセスの終了で捨てる。
+	w := startWriter(outWriter)
+
 	var totalBytes uint64
 	started := false
 	startTime := time.Now()
+	timedOut := false
 
 loop:
 	for {
@@ -355,13 +374,20 @@ loop:
 		case <-stopCh:
 			break loop
 		case <-timerCh:
+			timedOut = true
 			break loop
+		case err := <-w.errCh:
+			return fmt.Errorf("書き込み失敗: %w", err)
 		case pkt := <-tsCh:
 			if !started {
 				started = true
 				dbg("streaming started (%.1fs after launch)", time.Since(startTime).Seconds())
 			}
-			if _, err := outWriter.Write(pkt); err != nil {
+			select {
+			case w.ch <- pkt:
+			case <-stopCh:
+				break loop
+			case err := <-w.errCh:
 				return fmt.Errorf("書き込み失敗: %w", err)
 			}
 			totalBytes += uint64(len(pkt))
@@ -372,6 +398,121 @@ loop:
 		}
 	}
 
+	// 時間で終わったときは、渡した分を書き終えるまで待つ（その間にシグナルが来たら待たない）。
+	// シグナルで終わったときは待たない。
+	close(w.ch)
+	if timedOut {
+		select {
+		case <-w.done:
+		case <-stopCh:
+		}
+	}
+	if err := w.err(); err != nil {
+		return fmt.Errorf("書き込み失敗: %w", err)
+	}
+
 	dbg("total %d bytes, dropped chunks %d", totalBytes, dropped.Load())
 	return nil
+}
+
+// tsWriter は TS を出力先へ書き出すゴルーチン。
+type tsWriter struct {
+	ch    chan []byte
+	errCh chan error    // 書き込みに失敗したら 1 回だけ送られる
+	done  chan struct{} // ch が閉じられて書き終えたか、失敗したら閉じられる
+	last  atomic.Value  // 最後のエラー（error）
+}
+
+func startWriter(out io.Writer) *tsWriter {
+	w := &tsWriter{
+		ch:    make(chan []byte, 64),
+		errCh: make(chan error, 1),
+		done:  make(chan struct{}),
+	}
+	go func() {
+		defer close(w.done)
+		for pkt := range w.ch {
+			if _, err := out.Write(pkt); err != nil {
+				w.last.Store(err)
+				w.errCh <- err
+				return
+			}
+		}
+	}()
+	return w
+}
+
+// err は書き込みのエラーを返す（無ければ nil）。
+func (w *tsWriter) err() error {
+	if v := w.last.Load(); v != nil {
+		return v.(error)
+	}
+	return nil
+}
+
+// tuneISDBS は BS・110度CS に合わせ、TMCC の TSID 一覧からチャンネルの TS を選び直す（issue #1）。
+// 表の TSID が一覧の選ぶべきものと違えば、その TSID で合わせ直す。
+// 選べる TS が無いときは、先頭の TS を出さずにエラーで止める（--check のときは表示だけ）。
+func tuneISDBS(dev tunerDevice, ch channel.Channel, check bool, stopCh <-chan struct{}, stderr io.Writer, dbg func(string, ...any)) error {
+	if _, err := dev.TuneISDBS(ch.FreqKHz, ch.TSID, stopCh); err != nil {
+		return err
+	}
+
+	// ロックしてから TMCC が読めるまで少しかかることがあるので、空なら 1 秒ほど読み直す
+	var ids []uint16
+	for i := 0; i < 10; i++ {
+		select {
+		case <-stopCh:
+			return nil
+		default:
+		}
+		if got, err := dev.ReadTSIDs(); err == nil {
+			ids = got
+			var have int
+			for _, id := range got {
+				if !channel.IsTMCCPlaceholder(id) {
+					have++
+				}
+			}
+			if have > 0 {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	want, ok := ch.PickTSID(ids)
+	if ch.ExplicitTSID || ch.Slot < 0 {
+		dbg("TMCC TSIDs: %#04x (want %#04x -> %#04x)", ids, ch.TSID, want)
+	} else {
+		dbg("TMCC TSIDs: %#04x (want slot %d -> %#04x)", ids, ch.Slot, want)
+	}
+	if !ok {
+		var have []uint16
+		for _, id := range ids {
+			if !channel.IsTMCCPlaceholder(id) {
+				have = append(have, id)
+			}
+		}
+		var msg string
+		switch {
+		case len(have) == 0:
+			msg = fmt.Sprintf("%s: TS の一覧（TMCC）が読めない（受信できていない？）", ch.Name)
+		case ch.ExplicitTSID || ch.Slot < 0:
+			msg = fmt.Sprintf("%s: TSID %#04x の TS は、いまこのトランスポンダーに無い（あるのは %#04x）", ch.Name, ch.TSID, have)
+		default:
+			msg = fmt.Sprintf("%s: このトランスポンダーの TS は %d 個で、%d 番目は無い（あるのは %#04x）", ch.Name, len(have), ch.Slot, have)
+		}
+		if check {
+			fmt.Fprintln(stderr, msg)
+			return nil
+		}
+		return errors.New(msg)
+	}
+	if want == ch.TSID {
+		return nil
+	}
+	dbg("TSID %#04x -> %#04x で合わせ直す", ch.TSID, want)
+	_, err := dev.TuneISDBS(ch.FreqKHz, want, stopCh)
+	return err
 }

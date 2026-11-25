@@ -84,7 +84,7 @@ recgvmvp [オプション] チャンネル 秒 出力先
   --device PATH     使う機器ファイル（/dev/bus/usb/BBB/DDD）。空なら自動選択
   --model MODEL     使う機種（auto, vz, hz。既定: auto）
   --firmware PATH   ファームウェア（.bin）のパス（--fw も可）
-  --tsid HEX        BS/CS の TSID を 16 進で明示指定（例: 0x40f1）
+  --tsid HEX        BS/CS の TSID を 16 進で明示指定（例: 0x40f1）。トランスポンダーに無ければエラー
   --check           選局してロック状態と受信目安を表示するだけ
   --reset           開く前に USB ポートリセットを発行する
   --debug           詳細ログを stderr に出力（GVMVPVZ_DEBUG=1 でも可）
@@ -143,6 +143,8 @@ VZ 1 台で地デジ・BS・CS を全部受ける場合は、`types: [GR, BS, CS
 
 - **BS・CS のアンテナ電源**: この機器はアンテナ線に電源を出しません。  
   BS・CS を受けるときは、分配器やほかの機器からアンテナに電源が出ている環境で使ってください。
+- **BS のチャンネルの読み方**: `BSnn_s` の `s` は、そのトランスポンダーの何番目の TS か（recpt1・recisdb・Mirakurun の `channels.yml` と同じ）です。  
+  選局したあと TMCC の TSID 一覧（空きを除く）の `s` 番目を選びます。頼んだ TS が無いときは、別の TS を出さずにエラーで止まります。
 - **強制終了**: `kill -9` などで止めると、機器側の WatchDog でロックされることがあります。  
   ふだんは `SIGINT` / `SIGTERM` で止めてください。  
   ロックされた場合は、`--reset` か USB の抜き差しで戻ります。
