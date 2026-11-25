@@ -77,7 +77,7 @@ Mirakurun の設定例は [README](../README.md) にあります。
     * `unit 9`: IVDRM セッション・WatchDog・B-CAS 制御（VZ と共通）
 * **IF1 (`EP 0x02` OUT bulk / `EP 0x82` IN interrupt)**
 * **IF2 (`EP 0x03` OUT bulk / `EP 0x83` IN bulk)**:
-  * MPEG-2 TS ストリーム出力（`EP 0x83` 非同期バルク受信）。
+  * MPEG-2 TS ストリーム出力（`EP 0x83` 非同期バルク受信、32 本 × 42,112 B = `0xa480`）。
 
 ### 6.3 コールドブートとウォーム状態（VZ との重要な違い）
 

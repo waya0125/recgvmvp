@@ -40,6 +40,7 @@ Mirakurun の設定例は [README](../README.md) にあります。
 | 確かめたこと | 結果 |
 |---|---|
 | 60 秒の録画（地デジ・BS・110 度 CS） | どれもドロップ 0、TEI 0、同期ずれ 0 |
+| 長時間録画（BS15_0 15 分・地デジ 25ch 10 分・2009 年版ファームウェアで BS15_0 10 分、2026-11-26） | すべてドロップ 0・エラー 0 で完走 |
 | PT3・torne との同じチャンネルの同時録画（10 秒・60 秒） | パケット数・ビットレート・PAT/PMT の構成が同じ |
 | GV-MVP/HZ との同時録画（Mirakurun 経由、同じ USB バス） | どちらもドロップ 0 |
 | 出力が始まるまでの時間（ウォーム状態） | 起動から約 0.1〜0.2 秒 |
@@ -72,22 +73,28 @@ Mirakurun の設定例は [README](../README.md) にあります。
 
 * **IF0 (`EP 0x01` OUT bulk / `EP 0x81` IN interrupt)**:
   * SAA7164 の 11 バイト制御ヘッダ（`id`, `flags`, `size`, `command`, `controlselector`, `seqno`）＋ペイロード（最大 256 バイト分割）。
+  * 応答は `seqno` で照合する。異常終了等で未回収の応答が残った場合、次回の送信時に古い応答が 1 件ずつ押し出されることがある。
   * `unit` 割り当て:
+    * `unit 0`: システム制御（`GET_CUR sel 0x0f`: ブートローダ版、`SET_CUR sel 0x11`: DFU モードへのソフト再起動）
     * `unit 2`: EEPROM / GPIO（リセット・電源制御）
     * `unit 4`: ISDB-S（BS/110度CS）復調・I2C 越しチューナー
     * `unit 5`: ISDB-T（地上デジタル）復調・I2C 越しチューナー
     * `unit 8`: TS 出力ポート状態制御（`STOP=0`, `ACQUIRE=1`, `PAUSE=2`, `RUN=3`）
     * `unit 9`: IVDRM セッション・WatchDog（`sel 0x00..0x08`）、B-CAS 制御（`sel 0x1e..0x22`）
+* **IF1 (`EP 0x02` OUT bulk / `EP 0x82` IN interrupt)**:
+  * 純正ドライバ（`PhilMAS64.sys` の `UsbHWInterrupts`）が 4 バイトの割り込み通知（例: ストリーム開始時の `0x7b`）を受けるパイプ。TS 出力の維持には必須ではない。
 * **IF2 (`EP 0x83` IN bulk)**:
-  * MPEG-2 TS ストリーム出力。`recgvmvp` では `usbfs` の非同期 URB キュー（32 本 × 42,112 B = `0xa480`、SAA7164 の 1 転送ブロック＝224 TS パケットと一致）で受信する。
+  * MPEG-2 TS ストリーム出力。SAA7164 の 1 転送ブロックは **`42,112 B`（`0xa480` = 224 TS パケット）** であり、純正ドライバ（`DgtlTransportOutAllocatorPropertyHandler`）も `0xa480` を指定している（`UsbDataStream::tmIAcquire` は `64,000 B` 未満を要求）。
+  * `32 KiB` などブロック長と一致しない URB サイズで受信すると毎回ショートパケット分割が発生する。この状態では 4〜9 分後に SAA7164 ファームウェアが約 30 秒間無応答となり、WatchDog のタイムアウトにより TS 出力が停止する。`recgvmvp` では `usbfs` の非同期 URB キューを **32 本 × 42,112 B（`0xa480`）** として端数分割を防いでいる。
 
 ### 6.3 コールドブートとウォーム状態
 
-* **コールド状態（`bcdDevice != 0x0100`）**:
-  * 電源投入直後や USB 抜き差し直後は DFU モードで起動し、`NXP7164F_052B04BB.bin` の 2 ステージ転送が必要。
+* **コールド状態（`bcdDevice != 0x0100` または DFU 状態）**:
+  * 本機のファームウェアは RAM ロード方式であり、電源投入直後や USB 抜き差し直後は DFU（Boot2）モードで起動する。`NXP7164F_052B04BB.bin`（2009 年 CD 版 `0x00011d07`・2012 年 v4.19 版 `0x00021d14` のいずれも動作）の 2 ステージ転送が必要。
   * `recgvmvp` は `bcdDevice != 0x0100` を検出したときのみ自動でファームウェアを探して転送する。
 * **ウォーム状態（`bcdDevice == 0x0100`）**:
   * すでにファームウェアが動作している状態。ファームウェアファイルが無くてもそのまま動作する。
+  * 動作中ファームウェアの版は USB 文字列デスクリプタ `0x20` で確認できる（例: `0300011d07` / `0300021d14`）。ブートローダ版（`unit 0 GET_CUR sel 0x0f`）が `(val & 0xfc00) > 0x1bff` を満たす場合、`unit 0 SET_CUR sel 0x11`（4 バイト `0`）で USB の抜き差しなしに DFU モードへソフト再起動できる。
   * 初回（`unit 5 reg 0x0f` が `0x34` でも `0x1c` でもない場合）のみ GPIO リセット・復調/チューナー初期化・内蔵 B-CAS 初期化を実行し、以降はウォーム再オープンする。
   * 地デジ有効時は `unit 5 reg 0x0f == 0x34`、BS/CS 有効時は `unit 5 reg 0x0f == 0x1c` となる。
 
@@ -100,7 +107,8 @@ Mirakurun の設定例は [README](../README.md) にあります。
 ### 6.5 USB ストリーム保護と WatchDog
 
 * `unit 8` を `RUN` にする前に、`unit 9` で 1024-bit Diffie-Hellman 鍵交換と AES-128-ECB 相互認証を行い、`WatchDog`（`sel 0x06/0x07`）を開始する必要がある。
-* 録画中は 2 秒周期で WatchDog キックを送信し続ける。
+* 録画中は 2 秒周期で WatchDog キックを送信し続け、20 秒周期または失敗時に `WatchDogGetStatus`（`sel 0x08`）を確認する。キック途絶から約 30 秒でタイムアウトし（`status: 0x01 -> 0x05`）、TS 出力が停止する。`recgvmvp` は WatchDog 異常および EP83 無受信（初回 10 秒・受信中 5 秒）を検知して非 0 で終了する。
+* 異常終了直後などで `OpenSession`（`sel 0x02`）が失敗する場合は、`WatchDogInit`（`sel 0x06`）→ `CloseSession` → `IVDRM_Init` を実行してから再試行することでセッション詰まりから回復できる。
 * `EP 0x83` から届く TS パケットは AES-128-CBC で保護されており、`PID 0x0000`（`tsc=1/2`, `afc=0x20`）で届く鍵パケット（`FORIVFROMNXP`）から TS 鍵・IV を復号して各パケット（`tsc=3`）を復号し、ヌルパケット（`PID 0x1FFF`）を除外して出力する。
 
 ### 6.6 運用上の注意
